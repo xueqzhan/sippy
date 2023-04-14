@@ -1,6 +1,7 @@
 package sippyserver
 
 import (
+	"cloud.google.com/go/bigquery"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -51,6 +52,7 @@ func NewServer(
 	sippyNG fs.FS,
 	static fs.FS,
 	dbClient *db.DB,
+	bigQueryClient *bigquery.Client,
 	pinnedDateTime *time.Time,
 ) *Server {
 
@@ -69,6 +71,7 @@ func NewServer(
 		sippyNG:        sippyNG,
 		static:         static,
 		db:             dbClient,
+		bigQueryClient: bigQueryClient,
 		pinnedDateTime: pinnedDateTime,
 	}
 
@@ -100,6 +103,7 @@ type Server struct {
 	static                     fs.FS
 	httpServer                 *http.Server
 	db                         *db.DB
+	bigQueryClient             *bigquery.Client
 	pinnedDateTime             *time.Time
 }
 
@@ -527,6 +531,81 @@ func (s *Server) jsonTestOutputsFromDB(w http.ResponseWriter, req *http.Request)
 		api.RespondWithJSON(http.StatusInternalServerError, w, map[string]interface{}{
 			"code":    http.StatusInternalServerError,
 			"message": "error querying test outputs from db",
+		})
+		return
+	}
+	api.RespondWithJSON(http.StatusOK, w, outputs)
+}
+
+func (s *Server) jsonComponentsFromBigQuery(w http.ResponseWriter, req *http.Request) {
+	baseRelease := req.URL.Query().Get("baseRelease")
+	sampleRelease := req.URL.Query().Get("sampleRelease")
+	if baseRelease == "" ||
+		sampleRelease == "" {
+		api.RespondWithJSON(http.StatusBadRequest, w, map[string]interface{}{
+			"code":    http.StatusBadRequest,
+			"message": "missing required parameters.",
+		})
+		return
+	}
+
+	timeStr := req.URL.Query().Get("baseStartTime")
+	baseStartTime, err := time.Parse(time.RFC3339, timeStr)
+	if err != nil {
+		api.RespondWithJSON(http.StatusBadRequest, w, map[string]interface{}{
+			"code":    http.StatusBadRequest,
+			"message": "base start time in wrong format.",
+		})
+		return
+	}
+	timeStr = req.URL.Query().Get("baseEndTime")
+	baseEndTime, err := time.Parse(time.RFC3339, timeStr)
+	if err != nil {
+		api.RespondWithJSON(http.StatusBadRequest, w, map[string]interface{}{
+			"code":    http.StatusBadRequest,
+			"message": "base end time in wrong format.",
+		})
+		return
+	}
+	timeStr = req.URL.Query().Get("sampleStartTime")
+	sampleStartTime, err := time.Parse(time.RFC3339, timeStr)
+	if err != nil {
+		api.RespondWithJSON(http.StatusBadRequest, w, map[string]interface{}{
+			"code":    http.StatusBadRequest,
+			"message": "sample start time in wrong format.",
+		})
+		return
+	}
+	timeStr = req.URL.Query().Get("sampleEndTime")
+	sampleEndTime, err := time.Parse(time.RFC3339, timeStr)
+	if err != nil {
+		api.RespondWithJSON(http.StatusBadRequest, w, map[string]interface{}{
+			"code":    http.StatusBadRequest,
+			"message": "sample end time in wrong format.",
+		})
+		return
+	}
+
+	component := req.URL.Query().Get("component")
+	capability := req.URL.Query().Get("capability")
+	testId := req.URL.Query().Get("test_id")
+
+	platform := req.URL.Query().Get("platform")
+	upgrade := req.URL.Query().Get("upgrade")
+	arch := req.URL.Query().Get("arch")
+	network := req.URL.Query().Get("network")
+
+	groupBy := req.URL.Query().Get("group_by")
+
+	outputs, errs := api.GetComponentReportFromBigQuery(s.bigQueryClient, baseRelease, sampleRelease, component, capability, platform, upgrade, arch, network, testId, groupBy, baseStartTime, baseEndTime, sampleStartTime, sampleEndTime)
+	if len(errs) > 0 {
+		log.Warningf("%d errors were encountered while querying component from big query:", len(errs))
+		for _, err := range errs {
+			log.Error(err.Error())
+		}
+		api.RespondWithJSON(http.StatusInternalServerError, w, map[string]interface{}{
+			"code":    http.StatusInternalServerError,
+			"message": "error querying component from big query",
 		})
 		return
 	}
@@ -1018,6 +1097,7 @@ func (s *Server) Serve() {
 	serveMux.HandleFunc("/api/variants", s.jsonVariantsReportFromDB)
 	serveMux.HandleFunc("/api/canary", s.printCanaryReportFromDB)
 	serveMux.HandleFunc("/api/report_date", s.printReportDate)
+	serveMux.HandleFunc("/api/components", s.jsonComponentsFromBigQuery)
 
 	serveMux.HandleFunc("/api/perfscalemetrics", s.jsonPerfScaleMetricsReport)
 	serveMux.HandleFunc("/api/capabilities", s.jsonCapabilitiesReport)
