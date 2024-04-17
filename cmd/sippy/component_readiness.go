@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"github.com/openshift/sippy/pkg/api"
+	apitype "github.com/openshift/sippy/pkg/apis/api"
 	"io/fs"
 	"net/http"
 	"os"
@@ -147,6 +149,19 @@ func (f *ComponentReadinessFlags) runServerMode() error {
 		}
 	}
 
+	crVariants := apitype.ComponentReportTestVariants2{Variants: map[string][]string{}}
+	errs := []error{}
+	if bigQueryClient != nil {
+		crVariants, errs = api.GetComponentTestVariantsFromBigQuery2(bigQueryClient, f.GoogleCloudFlags.StorageBucket)
+		if len(errs) != 0 {
+			log.Warningf("%d errors were encountered while querying for component report variants", len(errs))
+			for _, err := range errs {
+				log.Error(err.Error())
+			}
+			return errors.WithMessage(err, "couldn't get component report variants")
+		}
+	}
+
 	server := sippyserver.NewServer(
 		sippyserver.ModeOpenShift,
 		f.ListenAddr,
@@ -161,6 +176,7 @@ func (f *ComponentReadinessFlags) runServerMode() error {
 		nil,
 		cacheClient,
 		4*time.Hour,
+		crVariants,
 	)
 
 	if f.MetricsAddr != "" {

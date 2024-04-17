@@ -115,6 +115,15 @@ func GetComponentTestVariantsFromBigQuery(client *bqcachedclient.Client, gcsBuck
 	return getDataFromCacheOrGenerate[apitype.ComponentReportTestVariants](client.Cache, cache.RequestOptions{}, GetPrefixedCacheKey("TestVariants~", generator), generator.GenerateVariants, apitype.ComponentReportTestVariants{})
 }
 
+func GetComponentTestVariantsFromBigQuery2(client *bqcachedclient.Client, gcsBucket string) (apitype.ComponentReportTestVariants2, []error) {
+	generator := componentReportGenerator{
+		client:    client,
+		gcsBucket: gcsBucket,
+	}
+
+	return getDataFromCacheOrGenerate[apitype.ComponentReportTestVariants2](client.Cache, cache.RequestOptions{}, GetPrefixedCacheKey("TestVariants~", generator), generator.GenerateVariants2, apitype.ComponentReportTestVariants2{})
+}
+
 func GetComponentReportFromBigQuery(client *bqcachedclient.Client, gcsBucket string,
 	baseRelease, sampleRelease apitype.ComponentReportRequestReleaseOptions,
 	testIDOption apitype.ComponentReportRequestTestIdentificationOptions,
@@ -210,6 +219,40 @@ func (c *componentReportGenerator) GenerateVariants() (apitype.ComponentReportTe
 		Upgrade:  columns["upgrade"],
 		Variant:  columns["variants"],
 	}, errs
+}
+
+func (c *componentReportGenerator) GenerateVariants2() (apitype.ComponentReportTestVariants2, []error) {
+	errs := []error{}
+	variants := apitype.ComponentReportTestVariants2{Variants: map[string][]string{}}
+	queryString := fmt.Sprintf(`SELECT variant_name, ARRAY_AGG(DISTINCT variant_value ORDER BY variant_value) AS variant_values
+					FROM
+						%s.job_variants
+					WHERE
+						variant_value!=""
+					GROUP BY
+						variant_name`, c.client.Dataset)
+	query := c.client.BQ.Query(queryString)
+	it, err := query.Read(context.TODO())
+	if err != nil {
+		log.WithError(err).Error("error querying variants from bigquery for %s", queryString)
+		return variants, []error{err}
+	}
+
+	for {
+		row := apitype.ComponentReportVariant{}
+		err := it.Next(&row)
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			wrappedErr := errors.Wrapf(err, "error fetching variant row")
+			log.WithError(err).Error("error fetching variants from bigquery")
+			errs = append(errs, wrappedErr)
+			return variants, errs
+		}
+		variants.Variants[row.VariantName] = row.VariantValues
+	}
+	return variants, nil
 }
 
 func (c *componentReportGenerator) GenerateReport() (apitype.ComponentReport, []error) {
@@ -1728,6 +1771,33 @@ func (c *componentReportGenerator) assessComponentStatus(sampleTotal, sampleSucc
 }
 
 func (c *componentReportGenerator) getUniqueJUnitColumnValues(field string, nested bool) ([]string, error) {
+	unnest := ""
+	if nested {
+		unnest = fmt.Sprintf(", UNNEST(%s) nested", field)
+		field = "nested"
+	}
+
+	queryString := fmt.Sprintf(`SELECT
+						DISTINCT %s as name
+					FROM
+						%s.junit %s
+					WHERE
+						NOT REGEXP_CONTAINS(prowjob_name, @IgnoredJobs)
+					ORDER BY
+						name`, field, c.client.Dataset, unnest)
+
+	query := c.client.BQ.Query(queryString)
+	query.Parameters = []bigquery.QueryParameter{
+		{
+			Name:  "IgnoredJobs",
+			Value: ignoredJobsRegexp,
+		},
+	}
+
+	return getSingleColumnResultToSlice(query)
+}
+
+func (c *componentReportGenerator) getUniqueJUnitColumnValues2(field string, nested bool) ([]string, error) {
 	unnest := ""
 	if nested {
 		unnest = fmt.Sprintf(", UNNEST(%s) nested", field)

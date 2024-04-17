@@ -800,6 +800,7 @@ type ComponentReportRequestExcludeOptions struct {
 	ExcludeNetworks  string
 	ExcludeUpgrades  string
 	ExcludeVariants  string
+	ExcludeVariants2 map[string][]string
 }
 
 type ComponentReportRequestVariantOptions struct {
@@ -1020,6 +1021,17 @@ type ComponentReportTestVariants struct {
 	Arch     []string `json:"arch,omitempty"`
 	Platform []string `json:"platform,omitempty"`
 	Variant  []string `json:"variant,omitempty"`
+}
+
+// ComponentReportTestVariants2 defines all variants supported in the system.
+type ComponentReportTestVariants2 struct {
+	Variants map[string][]string `json:"variants,omitempty"`
+}
+
+// ComponentReportVariant can be used in parsing BQ structure and query params
+type ComponentReportVariant struct {
+	VariantName string `bigquery:"variant_name"`
+	VariantValues []string `bigquery:"variant_values"`
 }
 
 var FailureRiskLevelNone = RiskLevel{Name: "None", Level: 0}

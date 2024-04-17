@@ -56,6 +56,7 @@ func NewServer(
 	pinnedDateTime *time.Time,
 	cacheClient cache.Cache,
 	crTimeRoundingFactor time.Duration,
+	crVariants           apitype.ComponentReportTestVariants2,
 ) *Server {
 
 	server := &Server{
@@ -72,11 +73,12 @@ func NewServer(
 		gcsClient:            gcsClient,
 		cache:                cacheClient,
 		crTimeRoundingFactor: crTimeRoundingFactor,
+		crVariants: crVariants,
 	}
 
-	if bigQueryClient != nil {
+	/*if bigQueryClient != nil {
 		go api.GetComponentTestVariantsFromBigQuery(bigQueryClient, gcsBucket)
-	}
+	}*/
 
 	return server
 }
@@ -109,6 +111,7 @@ type Server struct {
 	cache                cache.Cache
 	crTimeRoundingFactor time.Duration
 	capabilities         []string
+	crVariants           apitype.ComponentReportTestVariants2
 }
 
 func (s *Server) GetReportEnd() time.Time {
@@ -618,6 +621,29 @@ func (s *Server) jsonComponentTestVariantsFromBigQuery(w http.ResponseWriter, re
 	api.RespondWithJSON(http.StatusOK, w, outputs)
 }
 
+func (s *Server) jsonComponentTestVariantsFromBigQuery2(w http.ResponseWriter, req *http.Request) {
+	if s.bigQueryClient == nil {
+		api.RespondWithJSON(http.StatusBadRequest, w, map[string]interface{}{
+			"code":    http.StatusBadRequest,
+			"message": "component report API is only available when google-service-account-credential-file is configured",
+		})
+		return
+	}
+	outputs, errs := api.GetComponentTestVariantsFromBigQuery2(s.bigQueryClient, s.gcsBucket)
+	if len(errs) > 0 {
+		log.Warningf("%d errors were encountered while querying test variants from big query:", len(errs))
+		for _, err := range errs {
+			log.Error(err.Error())
+		}
+		api.RespondWithJSON(http.StatusInternalServerError, w, map[string]interface{}{
+			"code":    http.StatusInternalServerError,
+			"message": fmt.Sprintf("error querying test variants from big query: %v", errs),
+		})
+		return
+	}
+	api.RespondWithJSON(http.StatusOK, w, outputs)
+}
+
 func (s *Server) jsonComponentReportFromBigQuery(w http.ResponseWriter, req *http.Request) {
 	baseRelease, sampleRelease, testIDOption, variantOption, excludeOption, advancedOption, cacheOption, err := s.parseComponentReportRequest(req)
 	if err != nil {
@@ -753,6 +779,165 @@ func (s *Server) parseComponentReportRequest(req *http.Request) (
 	excludeOption.ExcludeNetworks = req.URL.Query().Get("excludeNetworks")
 	excludeOption.ExcludeUpgrades = req.URL.Query().Get("excludeUpgrades")
 	excludeOption.ExcludeVariants = req.URL.Query().Get("excludeVariants")
+
+	advancedOption.Confidence = 95
+	confidenceStr := req.URL.Query().Get("confidence")
+	if confidenceStr != "" {
+		advancedOption.Confidence, err = strconv.Atoi(confidenceStr)
+		if err != nil {
+			err = fmt.Errorf("confidence is not a number")
+			return
+		}
+		if advancedOption.Confidence < 0 || advancedOption.Confidence > 100 {
+			err = fmt.Errorf("confidence is not in the correct range")
+			return
+		}
+	}
+
+	advancedOption.PityFactor = 5
+	pityStr := req.URL.Query().Get("pity")
+	if pityStr != "" {
+		advancedOption.PityFactor, err = strconv.Atoi(pityStr)
+		if err != nil {
+			err = fmt.Errorf("pity factor is not a number")
+			return
+		}
+		if advancedOption.PityFactor < 0 || advancedOption.PityFactor > 100 {
+			err = fmt.Errorf("pity factor is not in the correct range")
+			return
+		}
+	}
+
+	advancedOption.MinimumFailure = 3
+	minFailStr := req.URL.Query().Get("minFail")
+	if minFailStr != "" {
+		advancedOption.MinimumFailure, err = strconv.Atoi(minFailStr)
+		if err != nil {
+			err = fmt.Errorf("min_fail is not a number")
+			return
+		}
+		if advancedOption.MinimumFailure < 0 {
+			err = fmt.Errorf("min_fail is not in the correct range")
+			return
+		}
+	}
+
+	advancedOption.IgnoreMissing = false
+	ignoreMissingStr := req.URL.Query().Get("ignoreMissing")
+	if ignoreMissingStr != "" {
+		advancedOption.IgnoreMissing, err = strconv.ParseBool(ignoreMissingStr)
+		if err != nil {
+			err = errors.WithMessage(err, "expected boolean for ignore missing")
+			return
+		}
+	}
+
+	advancedOption.IgnoreDisruption = true
+	ignoreDisruptionsStr := req.URL.Query().Get("ignoreDisruption")
+	if ignoreMissingStr != "" {
+		advancedOption.IgnoreDisruption, err = strconv.ParseBool(ignoreDisruptionsStr)
+		if err != nil {
+			err = errors.WithMessage(err, "expected boolean for ignore disruption")
+			return
+		}
+	}
+
+	forceRefreshStr := req.URL.Query().Get("forceRefresh")
+	if forceRefreshStr != "" {
+		cacheOption.ForceRefresh, err = strconv.ParseBool(forceRefreshStr)
+		if err != nil {
+			err = errors.WithMessage(err, "expected boolean for force refresh")
+			return
+		}
+	}
+	cacheOption.CRTimeRoundingFactor = s.crTimeRoundingFactor
+
+	return
+}
+
+func (s *Server) parseComponentReportRequest2(req *http.Request) (
+	baseRelease apitype.ComponentReportRequestReleaseOptions,
+	sampleRelease apitype.ComponentReportRequestReleaseOptions,
+	testIDOption apitype.ComponentReportRequestTestIdentificationOptions,
+	variantOption apitype.ComponentReportRequestVariantOptions,
+	excludeOption apitype.ComponentReportRequestExcludeOptions,
+	advancedOption apitype.ComponentReportRequestAdvancedOptions,
+	cacheOption cache.RequestOptions,
+	err error) {
+
+	if s.bigQueryClient == nil {
+		err = fmt.Errorf("component report API is only available when google-service-account-credential-file is configured")
+		return
+	}
+	baseRelease.Release = req.URL.Query().Get("baseRelease")
+	sampleRelease.Release = req.URL.Query().Get("sampleRelease")
+	if baseRelease.Release == "" {
+		err = fmt.Errorf("missing base_release")
+		return
+	}
+
+	if sampleRelease.Release == "" {
+		err = fmt.Errorf("missing sample_release")
+		return
+	}
+
+	timeStr := req.URL.Query().Get("baseStartTime")
+	baseRelease.Start, err = util.ParseCRReleaseTime(timeStr, s.crTimeRoundingFactor)
+	if err != nil {
+		err = fmt.Errorf("base start time in wrong format")
+		return
+	}
+	timeStr = req.URL.Query().Get("baseEndTime")
+	baseRelease.End, err = util.ParseCRReleaseTime(timeStr, s.crTimeRoundingFactor)
+	if err != nil {
+		err = fmt.Errorf("base end time in wrong format")
+		return
+	}
+	timeStr = req.URL.Query().Get("sampleStartTime")
+	sampleRelease.Start, err = util.ParseCRReleaseTime(timeStr, s.crTimeRoundingFactor)
+	if err != nil {
+		err = fmt.Errorf("sample start time in wrong format")
+		return
+	}
+	timeStr = req.URL.Query().Get("sampleEndTime")
+	sampleRelease.End, err = util.ParseCRReleaseTime(timeStr, s.crTimeRoundingFactor)
+	if err != nil {
+		err = fmt.Errorf("sample end time in wrong format")
+		return
+	}
+
+	testIDOption.Component = req.URL.Query().Get("component")
+	testIDOption.Capability = req.URL.Query().Get("capability")
+	testIDOption.TestID = req.URL.Query().Get("testId")
+
+	variantOption.GroupBy = req.URL.Query().Get("groupBy")
+	variantOption.Platform = req.URL.Query().Get("platform")
+	variantOption.Upgrade = req.URL.Query().Get("upgrade")
+	variantOption.Arch = req.URL.Query().Get("arch")
+	variantOption.Network = req.URL.Query().Get("network")
+	variantOption.Variant = req.URL.Query().Get("variant")
+
+	excludeOption.ExcludePlatforms = req.URL.Query().Get("excludeClouds")
+	excludeOption.ExcludeArches = req.URL.Query().Get("excludeArches")
+	excludeOption.ExcludeNetworks = req.URL.Query().Get("excludeNetworks")
+	excludeOption.ExcludeUpgrades = req.URL.Query().Get("excludeUpgrades")
+	excludeOption.ExcludeVariants = req.URL.Query().Get("excludeVariants")
+
+	variant := apitype.ComponentReportVariant{}
+	if excludeVariants, ok := req.URL.Query()["excludeVariant"]; ok {
+		for _, v := range excludeVariants {
+			err = json.Unmarshal([]byte(v), variant)
+			if err != nil {
+				err = fmt.Errorf("excludeVariant is in wrong format")
+				return
+			}
+			if _, ok := s.crVariants.Variants[variant.VariantName]; !ok {
+				err = fmt.Errorf("unknow variant to exclude %s", variant.VariantName)
+				return
+			}
+			excludeOption.ExcludeVariants2[variant.VariantName] = variant.VariantValues
+		}
+	}
 
 	advancedOption.Confidence = 95
 	confidenceStr := req.URL.Query().Get("confidence")
@@ -1576,6 +1761,12 @@ func (s *Server) Serve() {
 		},
 		{
 			EndpointPath: "/api/component_readiness/variants",
+			Description:  "Reports test variants for component readiness from BigQuery",
+			Capabilities: []string{ComponentReadinessCapability},
+			HandlerFunc:  s.jsonComponentTestVariantsFromBigQuery,
+		},
+		{
+			EndpointPath: "/api/component_readiness/variants2",
 			Description:  "Reports test variants for component readiness from BigQuery",
 			Capabilities: []string{ComponentReadinessCapability},
 			HandlerFunc:  s.jsonComponentTestVariantsFromBigQuery,
