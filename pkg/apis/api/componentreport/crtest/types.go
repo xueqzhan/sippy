@@ -44,10 +44,18 @@ const (
 	ExtremeRegression Status = -500
 	// SignificantRegression shows significant regression
 	SignificantRegression Status = -400
+	// ExtremeMassFailureRegression shows extreme regression that appears to be mass failures (cascading from install/upgrade)
+	ExtremeMassFailureRegression Status = -370
+	// SignificantMassFailureRegression shows significant regression that appears to be mass failures (cascading from install/upgrade)
+	SignificantMassFailureRegression Status = -360
 	// ExtremeTriagedRegression shows an ExtremeRegression that clears when Triaged incidents are factored in
 	ExtremeTriagedRegression Status = -300
 	// SignificantTriagedRegression shows a SignificantRegression that clears when Triaged incidents are factored in
-	SignificantTriagedRegression Status = -200
+	SignificantTriagedRegression Status = -290
+	// ExtremeMassFailureTriagedRegression shows an ExtremeMassFailureRegression that clears when Triaged incidents are factored in
+	ExtremeMassFailureTriagedRegression Status = -270
+	// SignificantMassFailureTriagedRegression shows a SignificantMassFailureRegression that clears when Triaged incidents are factored in
+	SignificantMassFailureTriagedRegression Status = -260
 	// FixedRegression indicates someone has claimed the bug is now fixed, but has not yet rolled off the sample window
 	FixedRegression Status = -150
 	// MissingSample indicates sample data missing
@@ -68,6 +76,14 @@ func StringForStatus(s Status) string {
 		return "Extreme"
 	case SignificantRegression:
 		return "Significant"
+	case ExtremeMassFailureRegression:
+		return "ExtremeMassFailure"
+	case SignificantMassFailureRegression:
+		return "SignificantMassFailure"
+	case ExtremeMassFailureTriagedRegression:
+		return "ExtremeMassFailureTriaged"
+	case SignificantMassFailureTriagedRegression:
+		return "SignificantMassFailureTriaged"
 	case ExtremeTriagedRegression:
 		return "ExtremeTriaged"
 	case SignificantTriagedRegression:

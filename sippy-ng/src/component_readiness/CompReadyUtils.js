@@ -5,6 +5,10 @@ import { styled } from '@mui/styles'
 import Alert from '@mui/material/Alert'
 import blue from './blue.svg'
 import blue_missing_data from './none-blue.svg'
+import extreme_mass_failure from './extreme-mass-failure.svg'
+import extreme_mass_failure_triaged from './extreme-mass-failure-triaged.svg'
+import extreme_purple from './extreme-purple.svg'
+import extreme_purple_triaged from './extreme-purple-triaged.svg'
 import fix_failed from './fix_failed.svg'
 import fix_failed_accessible from './fix_failed_accessible.svg'
 import fixed_waiting from './fixed_waiting.svg'
@@ -14,10 +18,14 @@ import green_half_data from './half.svg'
 import green_missing_data from './none.svg'
 import half_blue from './half-blue.svg'
 import heart from './improved.svg'
+import mass_failure from './mass-failure.svg'
+import mass_failure_triaged from './mass-failure-triaged.svg'
 import orange from './orange.svg'
 import orange_3d from './extreme-orange.svg'
 import orange_3d_triaged from './extreme-orange-triaged.svg'
 import orange_triaged from './orange-triaged.svg'
+import purple from './purple.svg'
+import purple_triaged from './purple-triaged.svg'
 import React from 'react'
 import red from './regressed.svg'
 import red_3d from './extreme.svg'
@@ -217,7 +225,35 @@ export function getStatusAndIcon(
     statusStr = statusStr + 'Fixed (hopefully) regression detected'
     let src = accessibilityMode ? fixed_waiting_accessible : fixed_waiting
     icon = <img width="15px" height="15px" src={src} alt="Fixed regression" />
-  } else if (status === -200) {
+  } else if (status === -260) {
+    statusStr =
+      statusStr +
+      'SignificantMassFailureTriagedRegression detected (likely from install/upgrade failures, triaged)'
+    let src = accessibilityMode ? purple_triaged : mass_failure_triaged
+    icon = (
+      <img
+        width="15px"
+        height="15px"
+        src={src}
+        alt="SignificantMassFailureTriagedRegression"
+      />
+    )
+  } else if (status === -270) {
+    statusStr =
+      statusStr +
+      'ExtremeMassFailureTriagedRegression detected ( >15% pass rate change, likely from install/upgrade failures, triaged)'
+    let src = accessibilityMode
+      ? extreme_purple_triaged
+      : extreme_mass_failure_triaged
+    icon = (
+      <img
+        width="15px"
+        height="15px"
+        src={src}
+        alt="ExtremeMassFailureTriagedRegression >15%"
+      />
+    )
+  } else if (status === -290) {
     statusStr = statusStr + 'SignificantTriagedRegression detected'
     let src = accessibilityMode ? orange_triaged : red_triaged
     icon = (
@@ -238,6 +274,32 @@ export function getStatusAndIcon(
         height="15px"
         src={src}
         alt="ExtremeTriagedRegression >15%"
+      />
+    )
+  } else if (status === -360) {
+    statusStr =
+      statusStr +
+      'SignificantMassFailureRegression detected (likely from install/upgrade failures)'
+    let src = accessibilityMode ? purple : mass_failure
+    icon = (
+      <img
+        width="15px"
+        height="15px"
+        src={src}
+        alt="SignificantMassFailureRegression"
+      />
+    )
+  } else if (status === -370) {
+    statusStr =
+      statusStr +
+      'ExtremeMassFailureRegression detected ( >15% pass rate change, likely from install/upgrade failures)'
+    let src = accessibilityMode ? extreme_purple : extreme_mass_failure
+    icon = (
+      <img
+        width="15px"
+        height="15px"
+        src={src}
+        alt="ExtremeMassFailureRegression >15%"
       />
     )
   } else if (status === -400) {

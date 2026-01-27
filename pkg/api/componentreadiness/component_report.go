@@ -872,6 +872,7 @@ func (c *ComponentReportGenerator) generateComponentTestReport(basisStatusMap, s
 		if err != nil {
 			return crtype.ComponentReport{}, err
 		}
+		// customize row id here.
 		updateCellStatus(
 			rowIdentifications, columnIdentifications, testKey, cellReport, // inputs
 			aggregatedStatus, allRows, allColumns, // these three are maps to be updated
@@ -973,6 +974,30 @@ func getRegressionStatus(basisPassPercentage, samplePassPercentage float64) crte
 	return crtest.SignificantRegression
 }
 
+// adjustStatusForMassFailures checks if a regression is primarily due to mass failures
+// (cascading from install/upgrade failures) and adjusts the status accordingly
+func adjustStatusForMassFailures(status crtest.Status, sampleStats crtest.Stats) crtest.Status {
+	// Only adjust if we have a regression and significant mass failures
+	if status >= crtest.NotSignificant {
+		return status // Not a regression, no adjustment needed
+	}
+
+	// Check if mass failures significantly impact the pass rate (>5% difference)
+	if !sampleStats.HasSignificantMassFailures() {
+		return status // Not enough mass failures to matter
+	}
+
+	// Adjust the status to indicate this is primarily a mass failure regression
+	switch status {
+	case crtest.ExtremeRegression:
+		return crtest.ExtremeMassFailureRegression
+	case crtest.SignificantRegression:
+		return crtest.SignificantMassFailureRegression
+	default:
+		return status // Other statuses (triaged, fixed, etc.) remain unchanged
+	}
+}
+
 // TODO: this will eventually become the analyze step on a Middleware, or possibly a separate
 // set of objects relating to analysis, as there's not a lot of overlap between the analyzers
 // (fishers, pass rate, bayes (future)) and the middlewares (fallback, intentional regressions,
@@ -1066,6 +1091,10 @@ func (c *ComponentReportGenerator) buildFisherExactTestStats(testStats *testdeta
 	}
 	logger.Debugf("computed status: %d", int(status))
 	testStats.ReportStatus = status
+
+	// Check if this regression is primarily due to mass failures (cascading from install/upgrade)
+	testStats.ReportStatus = adjustStatusForMassFailures(testStats.ReportStatus, testStats.SampleStats.Stats)
+
 	testStats.FisherExact = thrift.Float64Ptr(fisherExact)
 
 	baseRelease := "no basis"
@@ -1076,7 +1105,7 @@ func (c *ComponentReportGenerator) buildFisherExactTestStats(testStats *testdeta
 	if testStats.ReportStatus <= crtest.SignificantTriagedRegression {
 		logger.Debugf("regression detected against: %s", baseRelease)
 
-		if testStats.ReportStatus <= crtest.SignificantRegression {
+		if testStats.ReportStatus <= crtest.SignificantMassFailureRegression {
 			testStats.Explanations = append(testStats.Explanations,
 				fmt.Sprintf("%s regression detected.", crtest.StringForStatus(testStats.ReportStatus)))
 			testStats.Explanations = append(testStats.Explanations,
@@ -1085,9 +1114,35 @@ func (c *ComponentReportGenerator) buildFisherExactTestStats(testStats *testdeta
 				fmt.Sprintf("Test pass rate dropped from %.2f%% to %.2f%%.",
 					testStats.BaseStats.SuccessRate*float64(100),
 					testStats.SampleStats.SuccessRate*float64(100)))
+
+			// Add explanation for mass failures if applicable
+			if testStats.ReportStatus == crtest.ExtremeMassFailureRegression ||
+			   testStats.ReportStatus == crtest.SignificantMassFailureRegression {
+				testStats.Explanations = append(testStats.Explanations,
+					fmt.Sprintf("Note: %d of %d failures (%.1f%%) appear to be mass failures from jobs where install/upgrade failed.",
+						testStats.SampleStats.MassFailureCount,
+						testStats.SampleStats.FailureCount,
+						float64(testStats.SampleStats.MassFailureCount)/float64(testStats.SampleStats.FailureCount)*100))
+				testStats.Explanations = append(testStats.Explanations,
+					fmt.Sprintf("Adjusted pass rate (excluding mass failures): %.2f%%.",
+						testStats.SampleStats.MassFailureAdjustedPassRate*float64(100)))
+			}
 		} else {
 			testStats.Explanations = append(testStats.Explanations,
 				fmt.Sprintf("%s regression detected.", crtest.StringForStatus(testStats.ReportStatus)))
+
+			// Add explanation for triaged mass failures
+			if testStats.ReportStatus == crtest.ExtremeMassFailureTriagedRegression ||
+			   testStats.ReportStatus == crtest.SignificantMassFailureTriagedRegression {
+				testStats.Explanations = append(testStats.Explanations,
+					fmt.Sprintf("Note: %d of %d failures (%.1f%%) appear to be mass failures from jobs where install/upgrade failed.",
+						testStats.SampleStats.MassFailureCount,
+						testStats.SampleStats.FailureCount,
+						float64(testStats.SampleStats.MassFailureCount)/float64(testStats.SampleStats.FailureCount)*100))
+				testStats.Explanations = append(testStats.Explanations,
+					fmt.Sprintf("Adjusted pass rate (excluding mass failures): %.2f%%.",
+						testStats.SampleStats.MassFailureAdjustedPassRate*float64(100)))
+			}
 		}
 	} else {
 		logger.Debugf("NO regression detected against: %s", baseRelease)
@@ -1114,9 +1169,27 @@ func (c *ComponentReportGenerator) buildPassRateTestStats(testStats *testdetails
 		if successRate*100 < severeRegressionSuccessRate {
 			rStatus = crtest.ExtremeRegression
 		}
+
+		// Check if this is primarily a mass failure regression
+		rStatus = adjustStatusForMassFailures(rStatus, testStats.SampleStats.Stats)
+
 		testStats.ReportStatus = rStatus
 		testStats.Explanations = append(testStats.Explanations,
 			fmt.Sprintf("Test has a %.2f%% pass rate, but %.2f%% is required.", successRate*100, effectiveSuccessReq))
+
+		// Add explanation for mass failures if applicable
+		if testStats.ReportStatus == crtest.ExtremeMassFailureRegression ||
+		   testStats.ReportStatus == crtest.SignificantMassFailureRegression {
+			testStats.Explanations = append(testStats.Explanations,
+				fmt.Sprintf("Note: %d of %d failures (%.1f%%) appear to be mass failures from jobs where install/upgrade failed.",
+					testStats.SampleStats.MassFailureCount,
+					testStats.SampleStats.FailureCount,
+					float64(testStats.SampleStats.MassFailureCount)/float64(testStats.SampleStats.FailureCount)*100))
+			testStats.Explanations = append(testStats.Explanations,
+				fmt.Sprintf("Adjusted pass rate (excluding mass failures): %.2f%%.",
+					testStats.SampleStats.MassFailureAdjustedPassRate*float64(100)))
+		}
+
 		testStats.Comparison = crtest.PassRate
 		testStats.SampleStats.SuccessRate = successRate
 		return

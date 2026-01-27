@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBuildComponentReportQuery_ExclusiveTestFiltering(t *testing.T) {
+func TestBuildComponentReportQuery_MassFailureCounting(t *testing.T) {
 	mockClient := &bqcachedclient.Client{
 		Dataset: "test_dataset",
 	}
@@ -38,47 +38,47 @@ func TestBuildComponentReportQuery_ExclusiveTestFiltering(t *testing.T) {
 	includeVariants := map[string][]string{}
 
 	tests := []struct {
-		name               string
-		exclusiveTestNames []string
-		expectedCTE        bool
-		expectedFilter     bool
-		expectedParam      bool
-		expectedCTEContent string
+		name                   string
+		exclusiveTestNames     []string
+		expectedCTE            bool
+		expectedMassFailureCol bool
+		expectedParam          bool
+		expectedCTEContent     string
 	}{
 		{
-			name:               "No exclusive tests - no filtering",
-			exclusiveTestNames: nil,
-			expectedCTE:        false,
-			expectedFilter:     false,
-			expectedParam:      false,
+			name:                   "No exclusive tests - mass_failure_count is 0",
+			exclusiveTestNames:     nil,
+			expectedCTE:            false,
+			expectedMassFailureCol: true, // Should still have column but set to 0
+			expectedParam:          false,
 		},
 		{
-			name:               "Empty exclusive tests - no filtering",
-			exclusiveTestNames: []string{},
-			expectedCTE:        false,
-			expectedFilter:     false,
-			expectedParam:      false,
+			name:                   "Empty exclusive tests - mass_failure_count is 0",
+			exclusiveTestNames:     []string{},
+			expectedCTE:            false,
+			expectedMassFailureCol: true,
+			expectedParam:          false,
 		},
 		{
-			name: "With exclusive tests - filtering applied",
+			name: "With exclusive tests - mass failures counted",
 			exclusiveTestNames: []string{
 				"[sig-cluster-lifecycle] Cluster completes upgrade",
 				"install should succeed: overall",
 			},
-			expectedCTE:        true,
-			expectedFilter:     true,
-			expectedParam:      true,
-			expectedCTEContent: "jobs_with_failed_exclusive_tests",
+			expectedCTE:            true,
+			expectedMassFailureCol: true,
+			expectedParam:          true,
+			expectedCTEContent:     "jobs_with_failed_exclusive_tests",
 		},
 		{
-			name: "Single exclusive test - filtering applied",
+			name: "Single exclusive test - mass failures counted",
 			exclusiveTestNames: []string{
 				"install should succeed: overall",
 			},
-			expectedCTE:        true,
-			expectedFilter:     true,
-			expectedParam:      true,
-			expectedCTEContent: "jobs_with_failed_exclusive_tests",
+			expectedCTE:            true,
+			expectedMassFailureCol: true,
+			expectedParam:          true,
+			expectedCTEContent:     "jobs_with_failed_exclusive_tests",
 		},
 	}
 
@@ -110,12 +110,22 @@ func TestBuildComponentReportQuery_ExclusiveTestFiltering(t *testing.T) {
 					"Query should not contain jobs_with_failed_exclusive_tests CTE when no exclusive tests")
 			}
 
-			// Check if filtering WHERE clause is present when expected
-			if tt.expectedFilter {
-				assert.Contains(t, commonQuery, "test_name IN UNNEST(@ExclusiveTestNames)",
-					"Query should include exclusive test names filter")
-				assert.Contains(t, commonQuery, "prowjob_build_id NOT IN (SELECT prowjob_build_id FROM jobs_with_failed_exclusive_tests)",
-					"Query should exclude tests from jobs with failed exclusive tests")
+			// Check if mass_failure_count column is present
+			if tt.expectedMassFailureCol {
+				assert.Contains(t, commonQuery, "mass_failure_count",
+					"Query should include mass_failure_count column")
+
+				if len(tt.exclusiveTestNames) > 0 {
+					// Should have the CASE logic for counting mass failures
+					assert.Contains(t, commonQuery, "prowjob_build_id IN (SELECT prowjob_build_id FROM jobs_with_failed_exclusive_tests)",
+						"mass_failure_count should check if job had failed exclusive tests")
+					assert.Contains(t, commonQuery, "test_name NOT IN UNNEST(@ExclusiveTestNames)",
+						"mass_failure_count should exclude the exclusive tests themselves")
+				} else {
+					// Should be set to 0
+					assert.Contains(t, commonQuery, "0 AS mass_failure_count",
+						"mass_failure_count should be 0 when no exclusive tests")
+				}
 			}
 
 			// Check if query parameter is present when expected
@@ -157,9 +167,9 @@ func TestBuildComponentReportQuery_ExclusiveTestFiltering(t *testing.T) {
 	}
 }
 
-func TestBuildComponentReportQuery_ExclusiveTestLogic(t *testing.T) {
-	// This test verifies the specific logic: we only exclude OTHER tests from jobs
-	// where exclusive tests FAILED (not just present)
+func TestBuildComponentReportQuery_MassFailureCountLogic(t *testing.T) {
+	// This test verifies the specific logic: we count failures from jobs
+	// where exclusive tests FAILED as mass_failure_count
 	mockClient := &bqcachedclient.Client{
 		Dataset: "test_dataset",
 	}
@@ -204,25 +214,27 @@ func TestBuildComponentReportQuery_ExclusiveTestLogic(t *testing.T) {
 	assert.Contains(t, cteSection, "success_val = 0",
 		"CTE should only match FAILED exclusive tests (success_val = 0), not all instances")
 
-	// 3. Include the exclusive test itself OR tests from jobs without failed exclusive tests
-	assert.Contains(t, commonQuery, "test_name IN UNNEST(@ExclusiveTestNames)",
-		"Should always include the exclusive tests themselves")
-	assert.Contains(t, commonQuery, "prowjob_build_id NOT IN (SELECT prowjob_build_id FROM jobs_with_failed_exclusive_tests)",
-		"Should exclude other tests from jobs where exclusive tests failed")
+	// 3. Count mass failures using the CTE
+	assert.Contains(t, commonQuery, "mass_failure_count",
+		"Should include mass_failure_count column")
 
-	// 4. Verify the logic is an OR condition (include exclusive tests OR tests from clean jobs)
+	// 4. Verify the mass_failure_count logic
 	// Normalize whitespace for easier parsing
 	normalizedQuery := strings.ReplaceAll(strings.ReplaceAll(commonQuery, "\t", " "), "\n", " ")
 	normalizedQuery = strings.Join(strings.Fields(normalizedQuery), " ") // Collapse all whitespace
 
-	// The query should contain the OR logic between the two conditions
-	assert.Contains(t, normalizedQuery, "test_name IN UNNEST(@ExclusiveTestNames) OR prowjob_build_id NOT IN",
-		"Should have OR condition between exclusive test filter and job filter")
+	// Should count failures (adjusted_success_val = 0) from jobs with failed exclusive tests
+	assert.Contains(t, normalizedQuery, "adjusted_success_val = 0",
+		"Should count failed tests")
+	assert.Contains(t, normalizedQuery, "prowjob_build_id IN (SELECT prowjob_build_id FROM jobs_with_failed_exclusive_tests)",
+		"Should check if test is from a job with failed exclusive tests")
+	assert.Contains(t, normalizedQuery, "test_name NOT IN UNNEST(@ExclusiveTestNames)",
+		"Should not count exclusive tests themselves as mass failures")
 }
 
 func TestBuildComponentReportQuery_WithAndWithoutExclusiveTests(t *testing.T) {
 	// This test compares queries with and without exclusive tests to ensure
-	// the base query structure is the same, only the filtering differs
+	// mass_failure_count handling is correct
 	mockClient := &bqcachedclient.Client{
 		Dataset: "test_dataset",
 	}
@@ -272,11 +284,21 @@ func TestBuildComponentReportQuery_WithAndWithoutExclusiveTests(t *testing.T) {
 	assert.Contains(t, queryWith, "latest_component_mapping",
 		"Query with exclusive tests should have component mapping CTE")
 
-	// Only the query with exclusive tests should have the filtering CTE
+	// Both should have mass_failure_count column
+	assert.Contains(t, queryWithout, "mass_failure_count",
+		"Query without exclusive tests should have mass_failure_count column")
+	assert.Contains(t, queryWith, "mass_failure_count",
+		"Query with exclusive tests should have mass_failure_count column")
+
+	// Query without exclusive tests should set mass_failure_count to 0
+	assert.Contains(t, queryWithout, "0 AS mass_failure_count",
+		"Query without exclusive tests should set mass_failure_count to 0")
+
+	// Only the query with exclusive tests should have the CTE for identifying failed jobs
 	assert.NotContains(t, queryWithout, "jobs_with_failed_exclusive_tests",
-		"Query without exclusive tests should not have filtering CTE")
+		"Query without exclusive tests should not have jobs_with_failed_exclusive_tests CTE")
 	assert.Contains(t, queryWith, "jobs_with_failed_exclusive_tests",
-		"Query with exclusive tests should have filtering CTE")
+		"Query with exclusive tests should have jobs_with_failed_exclusive_tests CTE")
 
 	// Check parameters
 	assert.Len(t, paramsWithout, 0, "Query without exclusive tests should have no extra parameters")

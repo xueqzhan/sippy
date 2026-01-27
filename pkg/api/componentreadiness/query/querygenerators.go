@@ -336,6 +336,22 @@ func BuildComponentReportQuery(
 			client.Dataset, client.Dataset)
 	}
 
+	// Build the mass_failure_count column if exclusive tests are specified
+	massFailureColumn := ""
+	if len(exclusiveTestNames) > 0 {
+		massFailureColumn = `,
+						SUM(CASE
+							WHEN adjusted_success_val = 0
+							AND prowjob_build_id IN (SELECT prowjob_build_id FROM jobs_with_failed_exclusive_tests)
+							AND test_name NOT IN UNNEST(@ExclusiveTestNames)
+							THEN 1
+							ELSE 0
+						END) AS mass_failure_count`
+	} else {
+		massFailureColumn = `,
+						0 AS mass_failure_count`
+	}
+
 	queryString := fmt.Sprintf(`%s
 					SELECT
 						ANY_VALUE(test_name HAVING MAX prowjob_start) AS test_name,
@@ -344,14 +360,14 @@ func BuildComponentReportQuery(
 						%s
 						COUNT(cm.id) AS total_count,
 						SUM(adjusted_success_val) AS success_count,
-						SUM(adjusted_flake_count) AS flake_count,
+						SUM(adjusted_flake_count) AS flake_count%s,
 						MAX(CASE WHEN success_val = 0 THEN prowjob_start ELSE NULL END) AS last_failure,
 						ANY_VALUE(cm.component) AS component,
 						ANY_VALUE(cm.capabilities) AS capabilities,
 					FROM (%s)
 					INNER JOIN latest_component_mapping cm ON testsuite = cm.suite AND test_name = cm.name
 `,
-		withClause, selectVariants, fmt.Sprintf(dedupedJunitTable, jobNameQueryPortion, client.Dataset, junitTable, client.Dataset, client.Dataset, jobRunAnnotationToIgnore))
+		withClause, selectVariants, massFailureColumn, fmt.Sprintf(dedupedJunitTable, jobNameQueryPortion, client.Dataset, junitTable, client.Dataset, client.Dataset, jobRunAnnotationToIgnore))
 
 	queryString += joinVariants
 
@@ -359,13 +375,8 @@ func BuildComponentReportQuery(
 						(variant_registry_job_name LIKE 'periodic-%%' OR variant_registry_job_name LIKE 'release-%%' OR variant_registry_job_name LIKE 'aggregator-%%')`
 	commonParams := []bigquery.QueryParameter{}
 
-	// Add filtering logic for exclusive tests
+	// Add ExclusiveTestNames parameter if specified (needed for mass_failure_count calculation)
 	if len(exclusiveTestNames) > 0 {
-		queryString += `
-						AND (
-							test_name IN UNNEST(@ExclusiveTestNames)
-							OR prowjob_build_id NOT IN (SELECT prowjob_build_id FROM jobs_with_failed_exclusive_tests)
-						)`
 		commonParams = append(commonParams, bigquery.QueryParameter{
 			Name:  "ExclusiveTestNames",
 			Value: exclusiveTestNames,
@@ -709,6 +720,8 @@ func deserializeRowToTestStatus(row []bigquery.Value, schema bigquery.Schema) (s
 			cts.SuccessCount = int(row[i].(int64))
 		case col == "flake_count":
 			cts.FlakeCount = int(row[i].(int64))
+		case col == "mass_failure_count":
+			cts.MassFailureCount = int(row[i].(int64))
 		case col == "last_failure":
 			// ignore when we cant parse, its usually null
 			var err error
