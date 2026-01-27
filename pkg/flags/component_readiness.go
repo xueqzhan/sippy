@@ -21,6 +21,7 @@ type ComponentReadinessFlags struct {
 	ComponentReadinessViewsFile string
 	CRTimeRoundingFactor        time.Duration
 	CORSAllowedOrigin           string
+	ExcludeMassiveFailures      bool
 }
 
 func NewComponentReadinessFlags() *ComponentReadinessFlags {
@@ -32,6 +33,7 @@ func (f *ComponentReadinessFlags) BindFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&f.ComponentReadinessViewsFile, "views", "", "Optional yaml file for predefined Component Readiness views")
 	fs.DurationVar(&f.CRTimeRoundingFactor, "component-readiness-time-rounding-factor", defaultCRTimeRoundingFactor, factorUsage)
 	fs.StringVar(&f.CORSAllowedOrigin, "cors-allowed-origin", "*", "Optional allowed origin for CORS")
+	fs.BoolVar(&f.ExcludeMassiveFailures, "exclude-massive-failures", false, "Exclude other tests from jobs containing tests known to cause massive failures")
 }
 
 func (f *ComponentReadinessFlags) ParseViewsFile() (*api.SippyViews, error) {
@@ -54,6 +56,18 @@ func (f *ComponentReadinessFlags) ParseViewsFile() (*api.SippyViews, error) {
 		}
 	}
 	return vf, nil
+}
+
+// GetMassiveFailureTestNames returns the hard-coded list of test names that are known to cause massive failures.
+// When these tests appear in a job, all other tests in that job should be excluded from analysis.
+func (f *ComponentReadinessFlags) GetMassiveFailureTestNames() []string {
+	if !f.ExcludeMassiveFailures {
+		return nil
+	}
+	return []string{
+		"[sig-cluster-lifecycle] Cluster completes upgrade",
+		"install should succeed: overall",
+	}
 }
 
 func (f *ComponentReadinessFlags) validateViews(views *api.SippyViews) error {

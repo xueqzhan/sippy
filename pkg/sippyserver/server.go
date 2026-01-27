@@ -86,6 +86,7 @@ func NewServer(
 	enableWriteEndpoints bool,
 	chatAPIURL string,
 	jiraClient *jira.Client,
+	exclusiveTestNames []string,
 ) *Server {
 
 	server := &Server{
@@ -109,6 +110,7 @@ func NewServer(
 		enableWriteAPIs:      enableWriteEndpoints,
 		chatAPIURL:           chatAPIURL,
 		jiraClient:           jiraClient,
+		exclusiveTestNames:   exclusiveTestNames,
 	}
 
 	if bigQueryClient != nil {
@@ -153,6 +155,7 @@ type Server struct {
 	enableWriteAPIs      bool
 	chatAPIURL           string
 	jiraClient           *jira.Client
+	exclusiveTestNames   []string
 }
 
 func (s *Server) GetReportEnd() time.Time {
@@ -719,7 +722,8 @@ func (s *Server) getComponentReportFromRequest(req *http.Request) (componentrepo
 	}
 
 	options, warnings, err := utils.ParseComponentReportRequest(s.views.ComponentReadiness, allReleases, req, allJobVariants, s.crTimeRoundingFactor,
-		s.config.ComponentReadinessConfig.VariantJunitTableOverrides)
+		s.config.ComponentReadinessConfig.VariantJunitTableOverrides, s.exclusiveTestNames)
+
 	if err != nil {
 		return componentreport.ComponentReport{}, err
 	}
@@ -773,7 +777,8 @@ func (s *Server) jsonComponentReportTestDetailsFromBigQuery(w http.ResponseWrite
 	}
 
 	reqOptions, _, err := utils.ParseComponentReportRequest(s.views.ComponentReadiness, allReleases, req, allJobVariants, s.crTimeRoundingFactor,
-		s.config.ComponentReadinessConfig.VariantJunitTableOverrides)
+		s.config.ComponentReadinessConfig.VariantJunitTableOverrides, s.exclusiveTestNames)
+
 	if err != nil {
 		failureResponse(w, http.StatusBadRequest, err.Error())
 		return

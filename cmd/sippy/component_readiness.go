@@ -178,6 +178,9 @@ func (f *ComponentReadinessFlags) runServerMode() error {
 		log.WithError(err).Warn("unable to initialize Jira client, bug filing will be disabled")
 	}
 
+	// Get exclusive test names for massive failure filtering
+	exclusiveTestNames := f.ComponentReadinessFlags.GetMassiveFailureTestNames()
+
 	server := sippyserver.NewServer(
 		sippyserver.ModeOpenShift,
 		f.APIFlags.ListenAddr,
@@ -198,6 +201,7 @@ func (f *ComponentReadinessFlags) runServerMode() error {
 		f.APIFlags.EnableWriteEndpoints,
 		"", // No chat API in Component Readiness
 		jiraClient,
+		exclusiveTestNames,
 	)
 
 	if f.APIFlags.MetricsAddr != "" {
